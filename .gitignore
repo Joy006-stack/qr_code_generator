@@ -1,0 +1,25 @@
+# Virtual environment
+venv/
+
+# Python cache files
+__pycache__/
+*.pyc
+*.pyo
+
+# Environment variables / secrets
+.env
+
+# VS Code settings (optional, some teams commit these)
+.vscode/
+
+# OS-generated files
+.DS_Store
+Thumbs.db
+
+# Output / generated files
+output/
+logs/
+
+# Testing artifacts
+.pytest_cache/
+.ruff_cache/
