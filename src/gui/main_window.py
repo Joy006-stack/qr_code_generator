@@ -1,5 +1,6 @@
 from datetime import datetime
 from pathlib import Path
+from tkinter import filedialog
 
 import customtkinter as ctk
 
@@ -29,6 +30,11 @@ class MainWindow(ctk.CTk):
     FORMAT_OPTIONS = {
         "PNG": OutputFormat.PNG,
         "SVG": OutputFormat.SVG,
+    }
+
+    FORMAT_FILE_TYPES = {
+        OutputFormat.PNG: [("PNG image", "*.png")],
+        OutputFormat.SVG: [("SVG image", "*.svg")],
     }
 
     def __init__(self) -> None:
@@ -103,7 +109,7 @@ class MainWindow(ctk.CTk):
         self.status_label.pack(pady=10)
 
     def on_generate_click(self) -> None:
-        """Handles the Generate button click: reads input/settings, generates a QR code, updates status."""
+        """Handles the Generate button click: reads input/settings, asks where to save, generates the QR code."""
         entered_text = self.url_entry.get()
 
         try:
@@ -118,7 +124,11 @@ class MainWindow(ctk.CTk):
 
         error_correction = self.ERROR_CORRECTION_OPTIONS[self.error_correction_menu.get()]
         output_format = self.FORMAT_OPTIONS[self.format_menu.get()]
-        output_path = self._build_output_path(output_format)
+
+        output_path = self._ask_save_location(output_format)
+        if output_path is None:
+            # User cancelled the dialog — do nothing, no error, no status change.
+            return
 
         try:
             generate_qr_code(
@@ -137,9 +147,25 @@ class MainWindow(ctk.CTk):
             text=f"QR code saved to {output_path}", text_color="green"
         )
 
-    def _build_output_path(self, output_format: OutputFormat) -> Path:
-        """Builds a unique, timestamped output file path inside the output/ folder."""
+    def _ask_save_location(self, output_format: OutputFormat) -> Path | None:
+        """
+        Opens a native Save As dialog for the user to choose destination and filename.
+
+        Returns:
+            The chosen Path, or None if the user cancelled the dialog.
+        """
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-        extension = output_format.value
-        filename = f"qr_{timestamp}.{extension}"
-        return Path("output") / filename
+        default_filename = f"qr_{timestamp}.{output_format.value}"
+
+        chosen_path = filedialog.asksaveasfilename(
+            initialdir="output",
+            initialfile=default_filename,
+            defaultextension=f".{output_format.value}",
+            filetypes=self.FORMAT_FILE_TYPES[output_format],
+            title="Save QR Code As",
+        )
+
+        if not chosen_path:
+            return None
+
+        return Path(chosen_path)
