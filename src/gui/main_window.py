@@ -1,4 +1,9 @@
+from datetime import datetime
+from pathlib import Path
+
 import customtkinter as ctk
+
+from src.services.qr_service import QRGenerationError, generate_qr_code
 
 
 class MainWindow(ctk.CTk):
@@ -38,7 +43,22 @@ class MainWindow(ctk.CTk):
         self.status_label.pack(pady=10)
 
     def on_generate_click(self) -> None:
-        """Placeholder handler for the Generate button. Real QR logic comes in Phase 5."""
+        """Handles the Generate button click: reads input, generates a QR code, updates status."""
         entered_text = self.url_entry.get()
-        print(f"Generate clicked. Entry contains: '{entered_text}'")
-        self.status_label.configure(text="Button click registered (no QR logic yet).")
+        output_path = self._build_output_path()
+
+        try:
+            generate_qr_code(entered_text, output_path)
+        except QRGenerationError as error:
+            self.status_label.configure(text=f"Error: {error}", text_color="red")
+            return
+
+        self.status_label.configure(
+            text=f"QR code saved to {output_path}", text_color="green"
+        )
+
+    def _build_output_path(self) -> Path:
+        """Builds a unique, timestamped output file path inside the output/ folder."""
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        filename = f"qr_{timestamp}.png"
+        return Path("output") / filename
