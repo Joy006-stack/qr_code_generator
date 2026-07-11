@@ -1,6 +1,7 @@
 from pathlib import Path
 
 import pytest
+from PIL import Image
 
 from src.services.qr_service import (
     ErrorCorrectionLevel,
@@ -10,15 +11,19 @@ from src.services.qr_service import (
 )
 
 
+@pytest.fixture
+def test_logo(tmp_path: Path) -> Path:
+    """Creates a simple solid-color PNG to use as a logo in tests."""
+    logo_path = tmp_path / "logo.png"
+    image = Image.new("RGBA", (200, 200), (220, 38, 38, 255))
+    image.save(logo_path)
+    return logo_path
+
+
 def test_generate_qr_code_creates_a_file(tmp_path: Path) -> None:
     """A valid input should produce a real PNG file at the given path."""
-    # Arrange
     output_path = tmp_path / "test_qr.png"
-
-    # Act
     result_path = generate_qr_code("https://example.com", output_path)
-
-    # Assert
     assert result_path == output_path
     assert output_path.exists()
     assert output_path.stat().st_size > 0
@@ -26,13 +31,9 @@ def test_generate_qr_code_creates_a_file(tmp_path: Path) -> None:
 
 def test_generate_qr_code_rejects_empty_string(tmp_path: Path) -> None:
     """Empty input should raise QRGenerationError and create no file."""
-    # Arrange
     output_path = tmp_path / "should_not_exist.png"
-
-    # Act & Assert
     with pytest.raises(QRGenerationError):
         generate_qr_code("", output_path)
-
     assert not output_path.exists()
 
 
@@ -44,18 +45,10 @@ def test_generate_qr_code_rejects_whitespace_only(tmp_path: Path) -> None:
 
 def test_generate_qr_code_creates_missing_parent_folders(tmp_path: Path) -> None:
     """If the destination folder doesn't exist yet, it should be created automatically."""
-    # Arrange: a path with nested folders that don't exist yet
     output_path = tmp_path / "nested" / "folders" / "qr.png"
-
-    # Act
     generate_qr_code("test data", output_path)
-
-    # Assert
     assert output_path.exists()
     assert output_path.parent.is_dir()
-
-
-# --- Phase 9: tests for error correction, size, border, and format ---
 
 
 @pytest.mark.parametrize(
@@ -71,13 +64,8 @@ def test_generate_qr_code_accepts_all_error_correction_levels(
     tmp_path: Path, level: ErrorCorrectionLevel
 ) -> None:
     """Every ErrorCorrectionLevel option should produce a valid file without error."""
-    # Arrange
     output_path = tmp_path / f"qr_{level.name}.png"
-
-    # Act
     generate_qr_code("test data", output_path, error_correction=level)
-
-    # Assert
     assert output_path.exists()
     assert output_path.stat().st_size > 0
 
@@ -116,30 +104,114 @@ def test_generate_qr_code_accepts_border_zero(tmp_path: Path) -> None:
 
 def test_generate_qr_code_larger_box_size_produces_larger_file(tmp_path: Path) -> None:
     """A larger box_size should produce a visibly larger image file."""
-    # Arrange
     small_path = tmp_path / "small.png"
     large_path = tmp_path / "large.png"
-
-    # Act
     generate_qr_code("test data", small_path, box_size=2)
     generate_qr_code("test data", large_path, box_size=20)
-
-    # Assert: a bigger rendered image should mean a bigger file on disk
     assert large_path.stat().st_size > small_path.stat().st_size
 
 
 def test_generate_qr_code_svg_format_creates_svg_file(tmp_path: Path) -> None:
     """output_format=SVG should produce a real, non-empty SVG file."""
-    # Arrange
     output_path = tmp_path / "test_qr.svg"
-
-    # Act
     result_path = generate_qr_code(
         "https://example.com", output_path, output_format=OutputFormat.SVG
     )
-
-    # Assert
     assert result_path == output_path
     assert output_path.exists()
     content = output_path.read_text()
     assert "<svg" in content.lower()
+
+
+def test_generate_qr_code_accepts_high_contrast_colors(tmp_path: Path) -> None:
+    """Genuinely high-contrast custom colors should succeed."""
+    output_path = tmp_path / "colored.png"
+    generate_qr_code(
+        "test data", output_path, fill_color="#1E3A8A", back_color="#FEF3C7"
+    )
+    assert output_path.exists()
+    assert output_path.stat().st_size > 0
+
+
+def test_generate_qr_code_rejects_low_contrast_colors(tmp_path: Path) -> None:
+    """Colors too close in brightness should be rejected before saving."""
+    output_path = tmp_path / "should_not_exist.png"
+    with pytest.raises(QRGenerationError):
+        generate_qr_code(
+            "test", output_path, fill_color="#FFFF00", back_color="#FFFFCC"
+        )
+    assert not output_path.exists()
+
+
+def test_generate_qr_code_rejects_invalid_hex_color(tmp_path: Path) -> None:
+    """A malformed hex color string should raise a clear error, not crash unexpectedly."""
+    with pytest.raises(QRGenerationError):
+        generate_qr_code(
+            "test", tmp_path / "qr.png", fill_color="not-a-color", back_color="#FFFFFF"
+        )
+
+
+def test_generate_qr_code_default_colors_are_black_and_white(tmp_path: Path) -> None:
+    """Without specifying colors, behavior should match the original black-on-white default."""
+    output_path = tmp_path / "default_colors.png"
+    generate_qr_code("test data", output_path)
+    assert output_path.exists()
+
+
+# --- Phase 11: tests for logo embedding ---
+
+
+def test_generate_qr_code_with_logo_creates_a_file(tmp_path: Path, test_logo: Path) -> None:
+    """Providing a valid logo_path should succeed and produce a file."""
+    output_path = tmp_path / "qr_with_logo.png"
+    generate_qr_code(
+        "https://example.com", output_path, logo_path=test_logo
+    )
+    assert output_path.exists()
+    assert output_path.stat().st_size > 0
+
+
+def test_generate_qr_code_with_logo_forces_high_error_correction(
+    tmp_path: Path, test_logo: Path
+) -> None:
+    """Even if LOW is requested, a logo should force HIGH error correction internally."""
+    output_path = tmp_path / "qr_with_logo_low_requested.png"
+    generate_qr_code(
+        "https://example.com",
+        output_path,
+        error_correction=ErrorCorrectionLevel.LOW,
+        logo_path=test_logo,
+    )
+    assert output_path.exists()
+
+
+def test_generate_qr_code_rejects_svg_with_logo(tmp_path: Path, test_logo: Path) -> None:
+    """SVG output combined with a logo should be explicitly rejected, not silently ignored."""
+    output_path = tmp_path / "should_not_exist.svg"
+    with pytest.raises(QRGenerationError):
+        generate_qr_code(
+            "test",
+            output_path,
+            logo_path=test_logo,
+            output_format=OutputFormat.SVG,
+        )
+    assert not output_path.exists()
+
+
+def test_generate_qr_code_rejects_invalid_logo_path(tmp_path: Path) -> None:
+    """A logo_path pointing to a nonexistent or invalid file should raise a clear error."""
+    output_path = tmp_path / "qr.png"
+    fake_logo_path = tmp_path / "does_not_exist.png"
+    with pytest.raises(QRGenerationError):
+        generate_qr_code("test", output_path, logo_path=fake_logo_path)
+
+
+def test_generate_qr_code_with_logo_is_larger_than_without(
+    tmp_path: Path, test_logo: Path
+) -> None:
+    """A QR code with a logo embedded should differ in file size from one without."""
+    no_logo_path = tmp_path / "no_logo.png"
+    with_logo_path = tmp_path / "with_logo.png"
+    generate_qr_code("https://example.com", no_logo_path)
+    generate_qr_code("https://example.com", with_logo_path, logo_path=test_logo)
+    assert no_logo_path.stat().st_size != with_logo_path.stat().st_size

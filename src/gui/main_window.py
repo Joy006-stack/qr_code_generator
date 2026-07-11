@@ -1,6 +1,6 @@
 from datetime import datetime
 from pathlib import Path
-from tkinter import filedialog
+from tkinter import colorchooser, filedialog
 
 import customtkinter as ctk
 
@@ -41,8 +41,13 @@ class MainWindow(ctk.CTk):
         super().__init__()
 
         self.title("QR Code Generator")
-        self.geometry("600x650")
-        self.minsize(500, 600)
+        self.geometry("600x720")
+        self.minsize(500, 660)
+
+        # Track selected colors as instance state, since color pickers
+        # don't hold their own "current value" the way entries/dropdowns do.
+        self.fill_color: str = "#000000"
+        self.back_color: str = "#FFFFFF"
 
         # --- Widgets: core input ---
         self.title_label = ctk.CTkLabel(
@@ -78,6 +83,25 @@ class MainWindow(ctk.CTk):
         self.border_entry = ctk.CTkEntry(self.settings_frame, width=80)
         self.border_entry.insert(0, "4")
 
+        self.fill_color_label = ctk.CTkLabel(self.settings_frame, text="QR Color:")
+        self.fill_color_button = ctk.CTkButton(
+            self.settings_frame,
+            text="Choose",
+            width=80,
+            fg_color=self.fill_color,
+            command=self.on_choose_fill_color,
+        )
+
+        self.back_color_label = ctk.CTkLabel(self.settings_frame, text="Background Color:")
+        self.back_color_button = ctk.CTkButton(
+            self.settings_frame,
+            text="Choose",
+            width=80,
+            fg_color=self.back_color,
+            text_color="black",
+            command=self.on_choose_back_color,
+        )
+
         # --- Widgets: action + feedback ---
         self.generate_button = ctk.CTkButton(
             self, text="Generate", command=self.on_generate_click
@@ -104,13 +128,43 @@ class MainWindow(ctk.CTk):
         self.border_label.grid(row=3, column=0, padx=10, pady=10, sticky="w")
         self.border_entry.grid(row=3, column=1, padx=10, pady=10, sticky="w")
 
+        self.fill_color_label.grid(row=4, column=0, padx=10, pady=10, sticky="w")
+        self.fill_color_button.grid(row=4, column=1, padx=10, pady=10, sticky="w")
+
+        self.back_color_label.grid(row=5, column=0, padx=10, pady=10, sticky="w")
+        self.back_color_button.grid(row=5, column=1, padx=10, pady=10, sticky="w")
+
         # --- Layout: action + feedback ---
         self.generate_button.pack(pady=15)
         self.status_label.pack(pady=10)
 
+    def on_choose_fill_color(self) -> None:
+        """Opens a native color picker for the QR pattern (foreground) color."""
+        chosen = colorchooser.askcolor(color=self.fill_color, title="Choose QR Color")
+        hex_color = chosen[1]  # askcolor returns ((r,g,b), '#rrggbb') or (None, None)
+        if hex_color:
+            self.fill_color = hex_color
+            self.fill_color_button.configure(fg_color=hex_color)
+
+    def on_choose_back_color(self) -> None:
+        """Opens a native color picker for the background color."""
+        chosen = colorchooser.askcolor(color=self.back_color, title="Choose Background Color")
+        hex_color = chosen[1]
+        if hex_color:
+            self.back_color = hex_color
+            self.back_color_button.configure(fg_color=hex_color)
+
     def on_generate_click(self) -> None:
-        """Handles the Generate button click: reads input/settings, asks where to save, generates the QR code."""
+        """Handles the Generate button click: validates input first, then asks where to save, then generates."""
         entered_text = self.url_entry.get()
+
+        # Validate text FIRST, before bothering the user with a save dialog.
+        if not entered_text or not entered_text.strip():
+            self.status_label.configure(
+                text="Error: Please enter some text or a URL before generating.",
+                text_color="red",
+            )
+            return
 
         try:
             box_size = int(self.box_size_entry.get())
@@ -138,6 +192,8 @@ class MainWindow(ctk.CTk):
                 box_size=box_size,
                 border=border,
                 output_format=output_format,
+                fill_color=self.fill_color,
+                back_color=self.back_color,
             )
         except QRGenerationError as error:
             self.status_label.configure(text=f"Error: {error}", text_color="red")
