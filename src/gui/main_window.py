@@ -4,6 +4,7 @@ from tkinter import colorchooser, filedialog
 
 import customtkinter as ctk
 
+from src.services.favicon_service import FavIconFetchError, fetch_favicon, is_valid_http_url
 from src.services.qr_service import (
     ErrorCorrectionLevel,
     OutputFormat,
@@ -37,17 +38,21 @@ class MainWindow(ctk.CTk):
         OutputFormat.SVG: [("SVG image", "*.svg")],
     }
 
+    LOGO_FILE_TYPES = [
+        ("Image files", "*.png *.jpg *.jpeg *.bmp *.gif"),
+        ("All files", "*.*"),
+    ]
+
     def __init__(self) -> None:
         super().__init__()
 
         self.title("QR Code Generator")
-        self.geometry("600x720")
-        self.minsize(500, 660)
+        self.geometry("600x840")
+        self.minsize(500, 780)
 
-        # Track selected colors as instance state, since color pickers
-        # don't hold their own "current value" the way entries/dropdowns do.
         self.fill_color: str = "#000000"
         self.back_color: str = "#FFFFFF"
+        self.logo_path: Path | None = None
 
         # --- Widgets: core input ---
         self.title_label = ctk.CTkLabel(
@@ -102,6 +107,36 @@ class MainWindow(ctk.CTk):
             command=self.on_choose_back_color,
         )
 
+        self.logo_label = ctk.CTkLabel(self.settings_frame, text="Logo:")
+        self.logo_button = ctk.CTkButton(
+            self.settings_frame,
+            text="Choose Logo...",
+            width=140,
+            command=self.on_choose_logo,
+        )
+        self.logo_clear_button = ctk.CTkButton(
+            self.settings_frame,
+            text="Clear",
+            width=60,
+            fg_color="gray40",
+            command=self.on_clear_logo,
+        )
+
+        self.auto_favicon_checkbox = ctk.CTkCheckBox(
+            self.settings_frame,
+            text="Auto-fetch logo from website (if text is a URL)",
+            command=self.on_toggle_auto_favicon,
+        )
+
+        self.logo_hint_label = ctk.CTkLabel(
+            self.settings_frame,
+            text="",
+            text_color="gray",
+            font=ctk.CTkFont(size=11),
+            wraplength=400,
+            justify="left",
+        )
+
         # --- Widgets: action + feedback ---
         self.generate_button = ctk.CTkButton(
             self, text="Generate", command=self.on_generate_click
@@ -134,6 +169,16 @@ class MainWindow(ctk.CTk):
         self.back_color_label.grid(row=5, column=0, padx=10, pady=10, sticky="w")
         self.back_color_button.grid(row=5, column=1, padx=10, pady=10, sticky="w")
 
+        self.logo_label.grid(row=6, column=0, padx=10, pady=10, sticky="w")
+        self.logo_button.grid(row=6, column=1, padx=10, pady=10, sticky="w")
+        self.logo_clear_button.grid(row=6, column=2, padx=(0, 10), pady=10, sticky="w")
+
+        self.auto_favicon_checkbox.grid(
+            row=7, column=0, columnspan=3, padx=10, pady=(0, 5), sticky="w"
+        )
+
+        self.logo_hint_label.grid(row=8, column=0, columnspan=3, padx=10, pady=(0, 10), sticky="w")
+
         # --- Layout: action + feedback ---
         self.generate_button.pack(pady=15)
         self.status_label.pack(pady=10)
@@ -141,7 +186,7 @@ class MainWindow(ctk.CTk):
     def on_choose_fill_color(self) -> None:
         """Opens a native color picker for the QR pattern (foreground) color."""
         chosen = colorchooser.askcolor(color=self.fill_color, title="Choose QR Color")
-        hex_color = chosen[1]  # askcolor returns ((r,g,b), '#rrggbb') or (None, None)
+        hex_color = chosen[1]
         if hex_color:
             self.fill_color = hex_color
             self.fill_color_button.configure(fg_color=hex_color)
@@ -154,11 +199,44 @@ class MainWindow(ctk.CTk):
             self.back_color = hex_color
             self.back_color_button.configure(fg_color=hex_color)
 
+    def on_choose_logo(self) -> None:
+        """Opens a file picker for selecting a logo image to embed."""
+        # Manually choosing a logo overrides auto-fetch, so turn it off.
+        self.auto_favicon_checkbox.deselect()
+
+        chosen_path = filedialog.askopenfilename(
+            title="Choose Logo Image",
+            filetypes=self.LOGO_FILE_TYPES,
+        )
+        if chosen_path:
+            self.logo_path = Path(chosen_path)
+            self.logo_hint_label.configure(
+                text=f"Selected: {self.logo_path.name} "
+                "(error correction will be forced to High)"
+            )
+
+    def on_clear_logo(self) -> None:
+        """Removes the currently selected logo, if any."""
+        self.logo_path = None
+        self.auto_favicon_checkbox.deselect()
+        self.logo_hint_label.configure(text="")
+
+    def on_toggle_auto_favicon(self) -> None:
+        """Handles the auto-fetch-favicon checkbox being toggled on or off."""
+        if self.auto_favicon_checkbox.get():
+            # Checking this overrides any manually chosen logo.
+            self.logo_path = None
+            self.logo_hint_label.configure(
+                text="Will fetch the website's favicon automatically when you click Generate "
+                "(error correction will be forced to High)."
+            )
+        else:
+            self.logo_hint_label.configure(text="")
+
     def on_generate_click(self) -> None:
         """Handles the Generate button click: validates input first, then asks where to save, then generates."""
         entered_text = self.url_entry.get()
 
-        # Validate text FIRST, before bothering the user with a save dialog.
         if not entered_text or not entered_text.strip():
             self.status_label.configure(
                 text="Error: Please enter some text or a URL before generating.",
@@ -179,9 +257,33 @@ class MainWindow(ctk.CTk):
         error_correction = self.ERROR_CORRECTION_OPTIONS[self.error_correction_menu.get()]
         output_format = self.FORMAT_OPTIONS[self.format_menu.get()]
 
+        # Resolve which logo (if any) to actually use this time.
+        logo_path_to_use = self.logo_path
+        temp_favicon_path: Path | None = None
+
+        if self.auto_favicon_checkbox.get():
+            if not is_valid_http_url(entered_text.strip()):
+                self.status_label.configure(
+                    text="Error: Auto-fetch logo requires the text to be a valid URL.",
+                    text_color="red",
+                )
+                return
+            try:
+                temp_favicon_path = fetch_favicon(entered_text.strip())
+                logo_path_to_use = temp_favicon_path
+            except FavIconFetchError as error:
+                self.status_label.configure(text=f"Error: {error}", text_color="red")
+                return
+
+        if logo_path_to_use is not None and output_format is OutputFormat.SVG:
+            self.status_label.configure(
+                text="Error: Logo embedding is only supported for PNG, not SVG.",
+                text_color="red",
+            )
+            return
+
         output_path = self._ask_save_location(output_format)
         if output_path is None:
-            # User cancelled the dialog — do nothing, no error, no status change.
             return
 
         try:
@@ -194,10 +296,15 @@ class MainWindow(ctk.CTk):
                 output_format=output_format,
                 fill_color=self.fill_color,
                 back_color=self.back_color,
+                logo_path=logo_path_to_use,
             )
         except QRGenerationError as error:
             self.status_label.configure(text=f"Error: {error}", text_color="red")
             return
+        finally:
+            # Clean up the temporary favicon file, if one was downloaded.
+            if temp_favicon_path is not None:
+                temp_favicon_path.unlink(missing_ok=True)
 
         self.status_label.configure(
             text=f"QR code saved to {output_path}", text_color="green"
