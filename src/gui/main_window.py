@@ -12,6 +12,41 @@ from src.services.qr_service import (
     generate_qr_code,
 )
 
+# Vampire Castle: every color is intentionally dark and muted/desaturated.
+# No bright or vivid accents anywhere, including text.
+DARK_THEME = {
+    "window_bg": "#09090B",       
+    "frame_bg": "#13131A",        
+    "title_text": "#F2F2F7",      
+    "label_text": "#C9C5D4",      
+
+    "entry_bg": "#1A1A24",
+    "entry_text": "#F5F5FA",
+    "entry_border": "#6E56CF",    
+
+    "button_bg": "#6E56CF",
+    "button_hover": "#8467F5",
+    "button_text": "#FFFFFF",
+
+    "status_default": "#AFA7C7",
+}
+
+LIGHT_THEME = {
+    "window_bg": "#FAF7FF",       
+    "frame_bg": "#E6DEFF",        
+    "title_text": "#2E2548",      
+    "label_text": "#43365F",      
+
+    "entry_bg": "#FFFFFF",
+    "entry_text": "#2E2548",      
+    "entry_border": "#D8C8FF",    
+
+    "button_bg": "#A78BFA",       
+    "button_hover": "#8B6FF2",   
+    "button_text": "#FFFFFF",
+
+    "status_default": "#5A4F73",  
+}
 
 class MainWindow(ctk.CTk):
     """
@@ -47,23 +82,32 @@ class MainWindow(ctk.CTk):
         super().__init__()
 
         self.title("QR Code Generator")
-        self.geometry("600x840")
-        self.minsize(500, 780)
+        self.geometry("600x880")
+        self.minsize(500, 820)
 
         self.fill_color: str = "#000000"
         self.back_color: str = "#FFFFFF"
         self.logo_path: Path | None = None
+        self.current_theme: dict[str, str] = DARK_THEME
+        self.is_dark_mode: bool = True
 
-        # --- Widgets: core input ---
         self.title_label = ctk.CTkLabel(
             self, text="QR Code Generator", font=ctk.CTkFont(size=20, weight="bold")
+        )
+
+        # Icon-only toggle: shows the icon of the mode you'd switch TO.
+        self.theme_toggle_button = ctk.CTkButton(
+            self,
+            text="☀️",
+            width=44,
+            height=32,
+            command=self.on_toggle_theme,
         )
 
         self.url_entry = ctk.CTkEntry(
             self, placeholder_text="Enter text or URL", width=350
         )
 
-        # --- Widgets: settings ---
         self.settings_frame = ctk.CTkFrame(self)
 
         self.error_correction_label = ctk.CTkLabel(
@@ -131,24 +175,21 @@ class MainWindow(ctk.CTk):
         self.logo_hint_label = ctk.CTkLabel(
             self.settings_frame,
             text="",
-            text_color="gray",
             font=ctk.CTkFont(size=11),
             wraplength=400,
             justify="left",
         )
 
-        # --- Widgets: action + feedback ---
         self.generate_button = ctk.CTkButton(
             self, text="Generate", command=self.on_generate_click
         )
 
-        self.status_label = ctk.CTkLabel(self, text="", text_color="gray")
+        self.status_label = ctk.CTkLabel(self, text="")
 
-        # --- Layout: core input ---
-        self.title_label.pack(pady=(30, 20))
+        self.title_label.pack(pady=(25, 5))
+        self.theme_toggle_button.pack(pady=(0, 15))
         self.url_entry.pack(pady=10)
 
-        # --- Layout: settings frame (grid inside this frame) ---
         self.settings_frame.pack(pady=15, padx=20, fill="x")
 
         self.error_correction_label.grid(row=0, column=0, padx=10, pady=10, sticky="w")
@@ -179,9 +220,71 @@ class MainWindow(ctk.CTk):
 
         self.logo_hint_label.grid(row=8, column=0, columnspan=3, padx=10, pady=(0, 10), sticky="w")
 
-        # --- Layout: action + feedback ---
         self.generate_button.pack(pady=15)
         self.status_label.pack(pady=10)
+
+        self.apply_theme(self.current_theme)
+
+    def apply_theme(self, theme: dict[str, str]) -> None:
+        """Applies a color palette dictionary to every themed widget in the window."""
+        self.configure(fg_color=theme["window_bg"])
+        self.settings_frame.configure(fg_color=theme["frame_bg"])
+
+        self.title_label.configure(text_color=theme["title_text"])
+
+        for label in (
+            self.error_correction_label,
+            self.format_label,
+            self.box_size_label,
+            self.border_label,
+            self.fill_color_label,
+            self.back_color_label,
+            self.logo_label,
+        ):
+            label.configure(text_color=theme["label_text"])
+
+        for entry in (self.url_entry, self.box_size_entry, self.border_entry):
+            entry.configure(
+                fg_color=theme["entry_bg"],
+                text_color=theme["entry_text"],
+                border_color=theme["entry_border"],
+            )
+
+        for button in (
+            self.theme_toggle_button,
+            self.logo_button,
+            self.generate_button,
+        ):
+            button.configure(
+                fg_color=theme["button_bg"],
+                hover_color=theme["button_hover"],
+                text_color=theme["button_text"],
+            )
+
+        for option_menu in (self.error_correction_menu, self.format_menu):
+            option_menu.configure(
+                fg_color=theme["button_bg"],
+                button_color=theme["button_bg"],
+                button_hover_color=theme["button_hover"],
+                text_color=theme["button_text"],
+            )
+
+        self.auto_favicon_checkbox.configure(text_color=theme["label_text"])
+        self.logo_hint_label.configure(text_color=theme["label_text"])
+        self.status_label.configure(text_color=theme["status_default"])
+
+    def on_toggle_theme(self) -> None:
+        """Switches between the Vampire Castle and Chilled Picnic themes."""
+        self.is_dark_mode = not self.is_dark_mode
+
+        if self.is_dark_mode:
+            self.current_theme = DARK_THEME
+            self.theme_toggle_button.configure(text="☀️")
+        else:
+            self.current_theme = LIGHT_THEME
+            self.theme_toggle_button.configure(text="🌙")
+
+        self.apply_theme(self.current_theme)
 
     def on_choose_fill_color(self) -> None:
         """Opens a native color picker for the QR pattern (foreground) color."""
@@ -201,7 +304,6 @@ class MainWindow(ctk.CTk):
 
     def on_choose_logo(self) -> None:
         """Opens a file picker for selecting a logo image to embed."""
-        # Manually choosing a logo overrides auto-fetch, so turn it off.
         self.auto_favicon_checkbox.deselect()
 
         chosen_path = filedialog.askopenfilename(
@@ -224,7 +326,6 @@ class MainWindow(ctk.CTk):
     def on_toggle_auto_favicon(self) -> None:
         """Handles the auto-fetch-favicon checkbox being toggled on or off."""
         if self.auto_favicon_checkbox.get():
-            # Checking this overrides any manually chosen logo.
             self.logo_path = None
             self.logo_hint_label.configure(
                 text="Will fetch the website's favicon automatically when you click Generate "
@@ -257,7 +358,6 @@ class MainWindow(ctk.CTk):
         error_correction = self.ERROR_CORRECTION_OPTIONS[self.error_correction_menu.get()]
         output_format = self.FORMAT_OPTIONS[self.format_menu.get()]
 
-        # Resolve which logo (if any) to actually use this time.
         logo_path_to_use = self.logo_path
         temp_favicon_path: Path | None = None
 
@@ -302,7 +402,6 @@ class MainWindow(ctk.CTk):
             self.status_label.configure(text=f"Error: {error}", text_color="red")
             return
         finally:
-            # Clean up the temporary favicon file, if one was downloaded.
             if temp_favicon_path is not None:
                 temp_favicon_path.unlink(missing_ok=True)
 
