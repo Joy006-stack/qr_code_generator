@@ -13,6 +13,7 @@ from src.services.qr_service import (
     QRGenerationError,
     generate_qr_code,
 )
+from src.gui.tooltip import Tooltip
 
 DARK_THEME = {
     "window_bg": "#09090B",
@@ -100,11 +101,6 @@ class MainWindow(ctk.CTk):
         self._pending_favicon_temp_path: Path | None = None
         self._pending_params: dict | None = None
 
-        # A blank transparent placeholder — used instead of `image=None`,
-        # since configure(image=None) is unreliable in CustomTkinter and
-        # causes "image doesn't exist" errors on the next redraw. We always
-        # keep a *valid* CTkImage assigned, swapping between this blank one
-        # and the real QR preview.
         blank = Image.new("RGBA", (self.PREVIEW_SIZE, self.PREVIEW_SIZE), (0, 0, 0, 0))
         self._blank_preview_image = ctk.CTkImage(
             light_image=blank, dark_image=blank, size=(self.PREVIEW_SIZE, self.PREVIEW_SIZE)
@@ -124,7 +120,25 @@ class MainWindow(ctk.CTk):
         self._build_preview_card()
         self._build_footer()
 
+        self._bind_shortcuts()
+
         self.apply_theme(self.current_theme)
+
+    # ------------------------------------------------------------------
+    # Keyboard shortcuts
+    # ------------------------------------------------------------------
+
+    def _bind_shortcuts(self) -> None:
+        """
+        Global keyboard shortcuts, bound to the window itself so they work
+        regardless of which widget currently has focus.
+        """
+        self.bind("<Control-n>", lambda event: self.on_clear_click())
+        self.bind("<Control-N>", lambda event: self.on_clear_click())
+        self.bind("<Control-s>", lambda event: self.on_save_click())
+        self.bind("<Control-S>", lambda event: self.on_save_click())
+        self.bind("<Control-g>", lambda event: self._generate_preview())
+        self.bind("<Control-G>", lambda event: self._generate_preview())
 
     # ------------------------------------------------------------------
     # Layout construction
@@ -134,13 +148,10 @@ class MainWindow(ctk.CTk):
         self.header_frame = ctk.CTkFrame(self, fg_color="transparent")
         self.header_frame.pack(fill="x", padx=self.SPACE_MD, pady=(self.SPACE_MD, self.SPACE_SM))
 
-
         self.title_label = ctk.CTkLabel(
             self.header_frame, text="QR Code Generator",
             font=ctk.CTkFont(family="Segoe UI Semibold", size=28, weight="bold"),
         )
-        
-        
         self.title_label.pack(side="left")
 
         self.theme_toggle_button = ctk.CTkButton(
@@ -148,6 +159,7 @@ class MainWindow(ctk.CTk):
             command=self.on_toggle_theme,
         )
         self.theme_toggle_button.pack(side="right")
+        Tooltip(self.theme_toggle_button, "Switch theme")
 
     def _build_scroll_area(self) -> None:
         self.scroll_frame = ctk.CTkScrollableFrame(self, fg_color="transparent")
@@ -198,6 +210,7 @@ class MainWindow(ctk.CTk):
             command=self.on_clear_click,
         )
         self.clear_button.grid(row=0, column=1)
+        Tooltip(self.clear_button, "Clear everything (Ctrl+N)")
 
     def _build_style_card(self) -> None:
         card = self._make_card("Style")
@@ -212,6 +225,7 @@ class MainWindow(ctk.CTk):
             command=lambda choice: self._schedule_auto_preview(),
         )
         self.error_correction_menu.set("Medium (~15%)")
+        Tooltip(self.error_correction_menu, "How much damage the QR code can tolerate and still scan")
 
         self.format_label = ctk.CTkLabel(grid_frame, text="Format", anchor="w")
         self.format_menu = ctk.CTkOptionMenu(
@@ -219,6 +233,7 @@ class MainWindow(ctk.CTk):
             command=lambda choice: self._schedule_auto_preview(),
         )
         self.format_menu.set("PNG")
+        Tooltip(self.format_menu, "PNG (image) or SVG (scalable vector)")
 
         self.box_size_label = ctk.CTkLabel(grid_frame, text="Box Size (px)", anchor="w")
         self.box_size_entry = ctk.CTkEntry(grid_frame, width=90, corner_radius=8)
@@ -237,12 +252,14 @@ class MainWindow(ctk.CTk):
             grid_frame, text="", width=44, height=28, corner_radius=8,
             fg_color=self.fill_color, command=self.on_choose_fill_color,
         )
+        Tooltip(self.fill_color_button, "Choose the QR pattern color")
 
         self.back_color_label = ctk.CTkLabel(grid_frame, text="Background Color", anchor="w")
         self.back_color_button = ctk.CTkButton(
             grid_frame, text="", width=44, height=28, corner_radius=8,
             fg_color=self.back_color, border_width=1, command=self.on_choose_back_color,
         )
+        Tooltip(self.back_color_button, "Choose the background color")
 
         rows = [
             (self.error_correction_label, self.error_correction_menu),
@@ -269,18 +286,21 @@ class MainWindow(ctk.CTk):
             command=self.on_choose_logo,
         )
         self.logo_button.pack(side="left")
+        Tooltip(self.logo_button, "Pick an image to embed in the center of the QR code")
 
         self.logo_clear_button = ctk.CTkButton(
             row_frame, text="Clear Logo", width=90, corner_radius=8,
             command=self.on_clear_logo,
         )
         self.logo_clear_button.pack(side="left", padx=(self.SPACE_XS, 0))
+        Tooltip(self.logo_clear_button, "Remove the selected logo")
 
         self.auto_favicon_checkbox = ctk.CTkCheckBox(
             card, text="Auto-fetch logo from website (if text is a URL)",
             command=self.on_toggle_auto_favicon,
         )
         self.auto_favicon_checkbox.pack(fill="x", padx=self.SPACE_SM, pady=(self.SPACE_XS, self.SPACE_XS))
+        Tooltip(self.auto_favicon_checkbox, "Automatically use the website's own icon as the logo")
 
         self.logo_hint_label = ctk.CTkLabel(
             card, text="", font=ctk.CTkFont(size=11), wraplength=self.CONTENT_WIDTH - 60,
@@ -304,6 +324,7 @@ class MainWindow(ctk.CTk):
             command=self.on_save_click,
         )
         self.save_button.pack(fill="x", pady=(0, self.SPACE_XS))
+        Tooltip(self.save_button, "Save the previewed QR code to a file (Ctrl+S)")
 
         self.status_label = ctk.CTkLabel(self.content_column, text="")
         self.status_label.pack(pady=(0, self.SPACE_SM))
@@ -435,15 +456,6 @@ class MainWindow(ctk.CTk):
     # ------------------------------------------------------------------
 
     def _cleanup_pending(self) -> None:
-        """
-        Discards any pending (unsaved) preview and resets the preview area
-        back to its placeholder state.
-
-        Always keeps a *valid* CTkImage assigned to the label (the blank
-        placeholder) instead of ever passing image=None — configure(image=None)
-        is unreliable in CustomTkinter and can raise
-        "image ... doesn't exist" on the next redraw.
-        """
         if self._pending_preview_path is not None:
             self._pending_preview_path.unlink(missing_ok=True)
         if self._pending_favicon_temp_path is not None:
@@ -462,19 +474,37 @@ class MainWindow(ctk.CTk):
         self.save_button.configure(state="disabled")
 
     def on_clear_click(self) -> None:
+        """Resets the entire form back to its default state."""
         if self._debounce_after_id is not None:
             self.after_cancel(self._debounce_after_id)
             self._debounce_after_id = None
+
+        # Reset text input
         self.url_entry.delete(0, "end")
+
+        # Reset style settings back to defaults
+        self.error_correction_menu.set("Medium (~15%)")
+        self.format_menu.set("PNG")
+        self.box_size_entry.delete(0, "end")
+        self.box_size_entry.insert(0, "10")
+        self.border_entry.delete(0, "end")
+        self.border_entry.insert(0, "4")
+
+        self.fill_color = "#000000"
+        self.fill_color_button.configure(fg_color=self.fill_color)
+        self.back_color = "#FFFFFF"
+        self.back_color_button.configure(fg_color=self.back_color)
+
+        # Reset logo state, including the auto-fetch checkbox
+        self.logo_path = None
+        self.auto_favicon_checkbox.deselect()
+        self.logo_hint_label.configure(text="")
+
+        # Discard any pending preview and reset the preview area
         self._cleanup_pending()
         self.status_label.configure(text="")
 
     def _generate_preview(self) -> None:
-        """
-        Generates a preview from current field values. Always shows a clear
-        error on failure (except for an empty text field, which is treated
-        as a neutral 'nothing to preview yet' state, not an error).
-        """
         entered_text = self.url_entry.get()
 
         if not entered_text or not entered_text.strip():
@@ -571,6 +601,7 @@ class MainWindow(ctk.CTk):
         )
 
     def on_save_click(self) -> None:
+        """Saves the previewed QR code, then fully resets the form for the next one."""
         if self._pending_params is None:
             return
 
@@ -583,12 +614,14 @@ class MainWindow(ctk.CTk):
             generate_qr_code(output_path=output_path, **self._pending_params)
         except QRGenerationError as error:
             self.status_label.configure(text=f"Error: {error}", text_color="red")
-            return
-        finally:
             self._cleanup_pending()
+            return
 
+        # Full reset on success — clears text, colors, logo, and the
+        # auto-fetch checkbox, ready for the next QR code from a clean slate.
+        self.on_clear_click()
         self.status_label.configure(text=f"QR code saved to {output_path}", text_color="green")
-
+        
     def _ask_save_location(self, output_format: OutputFormat) -> Path | None:
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
         default_filename = f"qr_{timestamp}.{output_format.value}"
