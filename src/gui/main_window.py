@@ -1,10 +1,19 @@
 from datetime import datetime
 from pathlib import Path
 from tkinter import colorchooser, filedialog
+import io
+import os
 import tempfile
 
 import customtkinter as ctk
 from PIL import Image
+from tkinterdnd2 import DND_FILES, TkinterDnD
+
+try:
+    import win32clipboard
+    CLIPBOARD_AVAILABLE = True
+except ImportError:
+    CLIPBOARD_AVAILABLE = False
 
 from src.services.favicon_service import FavIconFetchError, fetch_favicon, is_valid_http_url
 from src.services.qr_service import (
@@ -89,7 +98,8 @@ class MainWindow(ctk.CTk):
         self.title("QR Code Generator")
         self.geometry("760x820")
         self.minsize(500, 500)
-
+        
+        self.TkdndVersion = TkinterDnD._require(self)
         self.fill_color: str = "#000000"
         self.back_color: str = "#FFFFFF"
         self.logo_path: Path | None = None
@@ -100,6 +110,7 @@ class MainWindow(ctk.CTk):
         self._pending_logo_for_save: Path | None = None
         self._pending_favicon_temp_path: Path | None = None
         self._pending_params: dict | None = None
+        self._last_saved_path: Path | None = None
 
         blank = Image.new("RGBA", (self.PREVIEW_SIZE, self.PREVIEW_SIZE), (0, 0, 0, 0))
         self._blank_preview_image = ctk.CTkImage(
@@ -296,26 +307,43 @@ class MainWindow(ctk.CTk):
         Tooltip(self.logo_clear_button, "Remove the selected logo")
 
         self.auto_favicon_checkbox = ctk.CTkCheckBox(
-            card, text="Auto-fetch logo from website (if text is a URL)",
+            card, text="Auto-fetch logo from website (URL ONLY!!)",
             command=self.on_toggle_auto_favicon,
         )
         self.auto_favicon_checkbox.pack(fill="x", padx=self.SPACE_SM, pady=(self.SPACE_XS, self.SPACE_XS))
-        Tooltip(self.auto_favicon_checkbox, "Automatically use the website's own icon as the logo")
+        Tooltip(self.auto_favicon_checkbox, "website's logo")
 
         self.logo_hint_label = ctk.CTkLabel(
-            card, text="", font=ctk.CTkFont(size=11), wraplength=self.CONTENT_WIDTH - 60,
+            card, text="drag & drop an image file onto this card.",
+            font=ctk.CTkFont(size=11), wraplength=self.CONTENT_WIDTH - 60,
             justify="left", anchor="w",
         )
         self.logo_hint_label.pack(fill="x", padx=self.SPACE_SM, pady=(0, self.SPACE_SM))
+
+        # Make the whole logo card a drop target for dragged image files.
+        card.drop_target_register(DND_FILES)
+        card.dnd_bind("<<Drop>>", self._on_logo_dropped)
 
     def _build_preview_card(self) -> None:
         card = self._make_card("Preview")
 
         self.preview_image_label = ctk.CTkLabel(
-            card, text="Type something and press Enter, or change a setting, to see a preview.",
+            card, text="qr preview.",
             height=self.PREVIEW_SIZE, font=ctk.CTkFont(size=12),
         )
-        self.preview_image_label.pack(padx=self.SPACE_SM, pady=(0, self.SPACE_SM))
+        self.preview_image_label.pack(padx=self.SPACE_SM, pady=(0, self.SPACE_XS))
+
+        preview_actions = ctk.CTkFrame(card, fg_color="transparent")
+        preview_actions.pack(padx=self.SPACE_SM, pady=(0, self.SPACE_SM))
+
+        self.copy_button = ctk.CTkButton(
+            preview_actions, text="Copy to Clipboard", width=150, corner_radius=8,
+            state="disabled", command=self.on_copy_click,
+        )
+        self.copy_button.pack(side="left", padx=(0, self.SPACE_XS))
+        if not CLIPBOARD_AVAILABLE:
+            self.copy_button.configure(state="disabled")
+        Tooltip(self.copy_button, "Copy the QR image to paste elsewhere")
 
     def _build_footer(self) -> None:
         self.save_button = ctk.CTkButton(
@@ -327,7 +355,21 @@ class MainWindow(ctk.CTk):
         Tooltip(self.save_button, "Save the previewed QR code to a file (Ctrl+S)")
 
         self.status_label = ctk.CTkLabel(self.content_column, text="")
-        self.status_label.pack(pady=(0, self.SPACE_SM))
+        self.status_label.pack(pady=(0, self.SPACE_XS))
+
+        self.post_save_actions = ctk.CTkFrame(self.content_column, fg_color="transparent")
+        self.post_save_actions.pack(pady=(0, self.SPACE_SM))
+
+        self.open_file_button = ctk.CTkButton(
+            self.post_save_actions, text="Open File", width=140, corner_radius=8,
+            command=self.on_open_file_click,
+        )
+        self.open_folder_button = ctk.CTkButton(
+            self.post_save_actions, text="Open Folder", width=140, corner_radius=8,
+            command=self.on_open_folder_click,
+        )
+        # Neither is packed here — they only appear after a successful save,
+        # via on_save_click, and are hidden again by _cleanup_pending.
 
     # ------------------------------------------------------------------
     # Theming
@@ -356,7 +398,10 @@ class MainWindow(ctk.CTk):
                 border_color=theme["entry_border"],
             )
 
-        for button in (self.theme_toggle_button, self.logo_button, self.save_button):
+        for button in (
+            self.theme_toggle_button, self.logo_button, self.save_button,
+            self.copy_button, self.open_file_button, self.open_folder_button,
+        ):
             button.configure(
                 fg_color=theme["accent"], hover_color=theme["accent_hover"],
                 text_color=theme["button_text"],
@@ -421,10 +466,34 @@ class MainWindow(ctk.CTk):
             )
             self._schedule_auto_preview()
 
+    def _on_logo_dropped(self, event) -> None:
+        """Handles a file being dragged and dropped onto the Logo card."""
+        # tkinterdnd2 gives paths as a string; braces wrap paths with spaces.
+        raw_path = event.data.strip("{}")
+        dropped_path = Path(raw_path)
+
+        valid_extensions = {".png", ".jpg", ".jpeg", ".bmp", ".gif"}
+        if dropped_path.suffix.lower() not in valid_extensions:
+            self.status_label.configure(
+                text=f"Error: '{dropped_path.name}' isn't a supported image type.",
+                text_color="red",
+            )
+            return
+
+        self.auto_favicon_checkbox.deselect()
+        self.logo_path = dropped_path
+        self.logo_hint_label.configure(
+            text=f"Selected (dropped): {dropped_path.name} "
+            "(error correction will be forced to High)"
+        )
+        self._schedule_auto_preview()
+
     def on_clear_logo(self) -> None:
         self.logo_path = None
         self.auto_favicon_checkbox.deselect()
-        self.logo_hint_label.configure(text="")
+        self.logo_hint_label.configure(
+            text="You can also drag & drop an image file onto this card."
+        )
         self._schedule_auto_preview()
 
     def on_toggle_auto_favicon(self) -> None:
@@ -435,7 +504,9 @@ class MainWindow(ctk.CTk):
                 "(error correction will be forced to High)."
             )
         else:
-            self.logo_hint_label.configure(text="")
+            self.logo_hint_label.configure(
+                text="You can also drag & drop an image file onto this card."
+            )
         self._schedule_auto_preview()
 
     # ------------------------------------------------------------------
@@ -472,6 +543,8 @@ class MainWindow(ctk.CTk):
             text="Type something and press Enter, or change a setting, to see a preview.",
         )
         self.save_button.configure(state="disabled")
+        self.copy_button.configure(state="disabled")
+        self.post_save_actions.pack_forget()
 
     def on_clear_click(self) -> None:
         """Resets the entire form back to its default state."""
@@ -479,10 +552,8 @@ class MainWindow(ctk.CTk):
             self.after_cancel(self._debounce_after_id)
             self._debounce_after_id = None
 
-        # Reset text input
         self.url_entry.delete(0, "end")
 
-        # Reset style settings back to defaults
         self.error_correction_menu.set("Medium (~15%)")
         self.format_menu.set("PNG")
         self.box_size_entry.delete(0, "end")
@@ -495,12 +566,12 @@ class MainWindow(ctk.CTk):
         self.back_color = "#FFFFFF"
         self.back_color_button.configure(fg_color=self.back_color)
 
-        # Reset logo state, including the auto-fetch checkbox
         self.logo_path = None
         self.auto_favicon_checkbox.deselect()
-        self.logo_hint_label.configure(text="")
+        self.logo_hint_label.configure(
+            text="You can also drag & drop an image file onto this card."
+        )
 
-        # Discard any pending preview and reset the preview area
         self._cleanup_pending()
         self.status_label.configure(text="")
 
@@ -595,10 +666,36 @@ class MainWindow(ctk.CTk):
         self.preview_image_label.configure(image=self._current_preview_image, text="")
 
         self.save_button.configure(state="normal")
+        if CLIPBOARD_AVAILABLE:
+            self.copy_button.configure(state="normal")
+        self.post_save_actions.pack_forget()
         self.status_label.configure(
             text="Preview ready. Click Save As to write it to a file.",
             text_color=self.current_theme["status_default"],
         )
+
+    def on_copy_click(self) -> None:
+        """Copies the current preview image to the Windows clipboard."""
+        if not CLIPBOARD_AVAILABLE or self._pending_preview_path is None:
+            return
+
+        try:
+            image = Image.open(self._pending_preview_path).convert("RGB")
+            output = io.BytesIO()
+            image.save(output, "BMP")
+            data = output.getvalue()[14:]  # strip the 14-byte BMP file header
+            output.close()
+
+            win32clipboard.OpenClipboard()
+            win32clipboard.EmptyClipboard()
+            win32clipboard.SetClipboardData(win32clipboard.CF_DIB, data)
+            win32clipboard.CloseClipboard()
+
+            self.status_label.configure(text="Copied to clipboard.", text_color="green")
+        except Exception as error:
+            self.status_label.configure(
+                text=f"Error: Could not copy to clipboard ({error}).", text_color="red"
+            )
 
     def on_save_click(self) -> None:
         """Saves the previewed QR code, then fully resets the form for the next one."""
@@ -617,11 +714,26 @@ class MainWindow(ctk.CTk):
             self._cleanup_pending()
             return
 
+        self._last_saved_path = output_path
+
         # Full reset on success — clears text, colors, logo, and the
         # auto-fetch checkbox, ready for the next QR code from a clean slate.
         self.on_clear_click()
         self.status_label.configure(text=f"QR code saved to {output_path}", text_color="green")
-        
+
+        self.open_file_button.pack(side="left", padx=(0, self.SPACE_XS))
+        self.open_folder_button.pack(side="left")
+
+    def on_open_file_click(self) -> None:
+        # Opens the last saved file with the OS default application. #
+        if self._last_saved_path is not None and self._last_saved_path.exists():
+            os.startfile(self._last_saved_path)
+
+    def on_open_folder_click(self) -> None:
+        """Opens the folder containing the last saved file in File Explorer."""
+        if self._last_saved_path is not None and self._last_saved_path.exists():
+            os.startfile(self._last_saved_path.parent)
+
     def _ask_save_location(self, output_format: OutputFormat) -> Path | None:
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
         default_filename = f"qr_{timestamp}.{output_format.value}"
